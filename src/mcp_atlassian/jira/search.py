@@ -1,6 +1,7 @@
 """Module for Jira search operations."""
 
 import logging
+from typing import Any
 
 import requests
 from requests.exceptions import HTTPError
@@ -86,56 +87,139 @@ class SearchMixin(JiraClient, IssueOperationsProto):
                 fields_param = fields
 
             if self.config.is_cloud:
-                actual_total = -1
+                limit_value = limit if isinstance(limit, int) else 50
+                limit_value = max(limit_value, 0)
+                response_dict_for_model: dict[str, Any] = {}
                 try:
-                    # Call 1: Get metadata (including total) using standard search API
-                    metadata_params = {"jql": jql, "maxResults": 0}
-                    metadata_response = self.jira.get(
-                        self.jira.resource_url("search"), params=metadata_params
-                    )
+                    issues_accumulated: list[dict] = []
+                    remaining = limit_value
+                    token_for_request: str | None = None
+                    last_response: dict[str, Any] | None = None
 
-                    if (
-                        isinstance(metadata_response, dict)
-                        and "total" in metadata_response
-                    ):
-                        try:
-                            actual_total = int(metadata_response["total"])
-                        except (ValueError, TypeError):
-                            logger.warning(
-                                f"Could not parse 'total' from metadata response for JQL: {jql}. Received: {metadata_response.get('total')}"
-                            )
-                    else:
-                        logger.warning(
-                            f"Could not retrieve total count from metadata response for JQL: {jql}. Response type: {type(metadata_response)}"
+                    params: dict[str, Any] = {}
+                    if limit_value == 0:
+                        params["jql"] = jql
+                        params["maxResults"] = 0
+                        if fields_param:
+                            params["fields"] = fields_param
+                        if expand:
+                            params["expand"] = expand
+
+                        zero_limit_response = self.jira.get(
+                            self.jira.resource_url("search/jql"), params=params
                         )
-                except Exception as meta_err:
-                    logger.error(
-                        f"Error fetching metadata for JQL '{jql}': {str(meta_err)}"
+                        if not isinstance(zero_limit_response, dict):
+                            msg = (
+                                "Unexpected return value type from Jira search/jql "
+                                f"response when limit is zero: {type(zero_limit_response)}"
+                            )
+                            logger.error(msg)
+                            raise TypeError(msg)
+
+                        response_dict_for_model["issues"] = []
+                        response_dict_for_model["nextPageToken"] = (
+                            zero_limit_response.get("nextPageToken")
+                        )
+                        response_dict_for_model["isLast"] = zero_limit_response.get(
+                            "isLast"
+                        )
+                        response_dict_for_model["maxResults"] = 0
+                        total_value = zero_limit_response.get("total")
+                        if isinstance(total_value, int):
+                            response_dict_for_model["total"] = int(total_value)
+
+                        search_result = JiraSearchResult.from_api_response(
+                            response_dict_for_model,
+                            base_url=self.config.url,
+                            requested_fields=fields_param,
+                        )
+
+                        return search_result
+
+                    while remaining > 0:
+                        page_limit = min(
+                            remaining if remaining > 0 else limit_value, 5000
+                        )
+                        params["jql"] = jql
+                        params["maxResults"] = page_limit
+                        if fields_param:
+                            params["fields"] = fields_param
+                        if expand:
+                            params["expand"] = expand
+                        if token_for_request:
+                            params["nextPageToken"] = token_for_request
+
+                        response = self.jira.get(
+                            self.jira.resource_url("search/jql"), params=params
+                        )
+                        if not isinstance(response, dict):
+                            msg = f"Unexpected return value type from Jira search/jql response: {type(response)}"
+                            logger.error(msg)
+                            raise TypeError(msg)
+
+                        last_response = response
+                        page_issues = response.get("issues") or []
+                        if not isinstance(page_issues, list):
+                            msg = f"Unexpected issues payload type from Jira search/jql response: {type(page_issues)}"
+                            logger.error(msg)
+                            raise TypeError(msg)
+
+                        issues_accumulated.extend(page_issues)
+                        remaining = max(remaining - len(page_issues), 0)
+
+                        next_page_token = response.get("nextPageToken")
+                        is_last_page = response.get("isLast")
+
+                        if remaining <= 0:
+                            break
+                        if not page_issues:
+                            logger.warning(
+                                "Received empty issues page from Jira search/jql; stopping pagination."
+                            )
+                            break
+                        if not next_page_token:
+                            break
+
+                        token_for_request = str(next_page_token)
+
+                    trimmed_issues = (
+                        issues_accumulated[:limit_value]
+                        if limit_value > 0
+                        else issues_accumulated
+                    )
+                    response_dict_for_model["issues"] = trimmed_issues
+                    response_dict_for_model["nextPageToken"] = (
+                        last_response.get("nextPageToken")
+                        if isinstance(last_response, dict)
+                        else None
+                    )
+                    response_dict_for_model["isLast"] = (
+                        last_response.get("isLast")
+                        if isinstance(last_response, dict)
+                        else None
                     )
 
-                # Call 2: Get the actual issues using the enhanced method
-                issues_response_list = self.jira.enhanced_jql_get_list_of_tickets(
-                    jql, fields=fields_param, limit=limit, expand=expand
-                )
+                    if isinstance(last_response, dict):
+                        if (
+                            last_response.get("nextPageToken") in (None, "")
+                            or last_response.get("isLast") is True
+                        ) and len(issues_accumulated) <= (
+                            limit_value if limit_value > 0 else len(issues_accumulated)
+                        ):
+                            response_dict_for_model["total"] = len(issues_accumulated)
 
-                if not isinstance(issues_response_list, list):
-                    msg = f"Unexpected return value type from `jira.enhanced_jql_get_list_of_tickets`: {type(issues_response_list)}"
-                    logger.error(msg)
-                    raise TypeError(msg)
+                    search_result = JiraSearchResult.from_api_response(
+                        response_dict_for_model,
+                        base_url=self.config.url,
+                        requested_fields=fields_param,
+                    )
 
-                response_dict_for_model = {
-                    "issues": issues_response_list,
-                    "total": actual_total,
-                }
-
-                search_result = JiraSearchResult.from_api_response(
-                    response_dict_for_model,
-                    base_url=self.config.url,
-                    requested_fields=fields_param,
-                )
-
-                # Return the full search result object
-                return search_result
+                    return search_result
+                except Exception:
+                    logger.error(
+                        "Error executing Jira Cloud enhanced search", exc_info=True
+                    )
+                    raise
             else:
                 limit = min(limit, 50)
                 response = self.jira.jql(
