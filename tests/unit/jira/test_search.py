@@ -529,7 +529,7 @@ class TestSearchMixin:
 
         with pytest.raises(Exception) as e:
             search_mixin.get_board_issues("1000", jql="", limit=20)
-        assert "API Error content" in str(e.value)
+        assert str(e.value).startswith("Error searching issues for board with JQL")
 
     def test_get_sprint_issues(self, search_mixin: SearchMixin):
         """Test get_sprint_issues method."""
@@ -592,7 +592,7 @@ class TestSearchMixin:
 
         with pytest.raises(Exception) as e:
             search_mixin.get_sprint_issues("10001")
-        assert "API Error content" in str(e.value)
+        assert str(e.value).startswith("Error searching issues for sprint")
 
     @pytest.mark.parametrize("is_cloud", [True, False])
     def test_search_issues_with_projects_filter_jql_construction(
