@@ -1,6 +1,7 @@
 """Module for Jira search operations."""
 
 import logging
+import os
 from typing import Any
 
 import requests
@@ -13,6 +14,21 @@ from .constants import DEFAULT_READ_JIRA_FIELDS
 from .protocols import IssueOperationsProto
 
 logger = logging.getLogger("mcp-jira")
+
+_CLOUD_PAGE_UPPER_BOUND = 5000
+
+
+def _resolve_cloud_page_size(limit_value: int | None) -> int:
+    """Resolve the page size for Jira Cloud enhanced search."""
+    try:
+        from_env = int(os.getenv("JIRA_SEARCH_PAGE_SIZE", "1000"))
+    except ValueError:
+        from_env = 1000
+
+    base_size = min(max(from_env, 1), _CLOUD_PAGE_UPPER_BOUND)
+    if isinstance(limit_value, int) and limit_value > 0:
+        return min(base_size, limit_value)
+    return base_size
 
 
 class SearchMixin(JiraClient, IssueOperationsProto):
@@ -75,7 +91,7 @@ class SearchMixin(JiraClient, IssueOperationsProto):
                     # Only add if not already filtering by project
                     jql = f"({jql}) AND {project_query}"
 
-                logger.info(f"Applied projects filter to query: {jql}")
+                logger.info("Applied projects filter to query: %s", jql)
 
             # Convert fields to proper format if it's a list/tuple/set
             fields_param: str | None
@@ -95,92 +111,87 @@ class SearchMixin(JiraClient, IssueOperationsProto):
                     remaining = limit_value
                     token_for_request: str | None = None
                     last_response: dict[str, Any] | None = None
+                    page_size = _resolve_cloud_page_size(limit_value)
 
-                    params: dict[str, Any] = {}
                     if limit_value == 0:
-                        params["jql"] = jql
-                        params["maxResults"] = 0
+                        params: dict[str, Any] = {"jql": jql, "maxResults": 0}
                         if fields_param:
                             params["fields"] = fields_param
                         if expand:
                             params["expand"] = expand
 
-                        zero_limit_response = self.jira.get(
+                        last_response = self.jira.get(
                             self.jira.resource_url("search/jql"), params=params
                         )
-                        if not isinstance(zero_limit_response, dict):
+                        if not isinstance(last_response, dict):
                             msg = (
                                 "Unexpected return value type from Jira search/jql "
-                                f"response when limit is zero: {type(zero_limit_response)}"
+                                f"response when limit is zero: {type(last_response)}"
                             )
                             logger.error(msg)
                             raise TypeError(msg)
 
-                        response_dict_for_model["issues"] = []
-                        response_dict_for_model["nextPageToken"] = (
-                            zero_limit_response.get("nextPageToken")
+                        logger.info(
+                            "jira_search event=cloud_meta_only jql_hash=%d page_size=%d token_present=%s is_last=%s",
+                            hash(jql),
+                            0,
+                            bool(last_response.get("nextPageToken")),
+                            last_response.get("isLast"),
                         )
-                        response_dict_for_model["isLast"] = zero_limit_response.get(
-                            "isLast"
-                        )
-                        response_dict_for_model["maxResults"] = 0
-                        total_value = zero_limit_response.get("total")
-                        if isinstance(total_value, int):
-                            response_dict_for_model["total"] = int(total_value)
+                    else:
+                        while remaining > 0:
+                            current_page_size = min(page_size, remaining)
+                            params = {"jql": jql, "maxResults": current_page_size}
+                            if token_for_request:
+                                params["nextPageToken"] = token_for_request
+                            if fields_param:
+                                params["fields"] = fields_param
+                            if expand:
+                                params["expand"] = expand
 
-                        search_result = JiraSearchResult.from_api_response(
-                            response_dict_for_model,
-                            base_url=self.config.url,
-                            requested_fields=fields_param,
-                        )
-
-                        return search_result
-
-                    while remaining > 0:
-                        page_limit = min(
-                            remaining if remaining > 0 else limit_value, 5000
-                        )
-                        params["jql"] = jql
-                        params["maxResults"] = page_limit
-                        if fields_param:
-                            params["fields"] = fields_param
-                        if expand:
-                            params["expand"] = expand
-                        if token_for_request:
-                            params["nextPageToken"] = token_for_request
-
-                        response = self.jira.get(
-                            self.jira.resource_url("search/jql"), params=params
-                        )
-                        if not isinstance(response, dict):
-                            msg = f"Unexpected return value type from Jira search/jql response: {type(response)}"
-                            logger.error(msg)
-                            raise TypeError(msg)
-
-                        last_response = response
-                        page_issues = response.get("issues") or []
-                        if not isinstance(page_issues, list):
-                            msg = f"Unexpected issues payload type from Jira search/jql response: {type(page_issues)}"
-                            logger.error(msg)
-                            raise TypeError(msg)
-
-                        issues_accumulated.extend(page_issues)
-                        remaining = max(remaining - len(page_issues), 0)
-
-                        next_page_token = response.get("nextPageToken")
-                        is_last_page = response.get("isLast")
-
-                        if remaining <= 0:
-                            break
-                        if not page_issues:
-                            logger.warning(
-                                "Received empty issues page from Jira search/jql; stopping pagination."
+                            response = self.jira.get(
+                                self.jira.resource_url("search/jql"), params=params
                             )
-                            break
-                        if not next_page_token:
-                            break
+                            if not isinstance(response, dict):
+                                msg = f"Unexpected return value type from Jira search/jql response: {type(response)}"
+                                logger.error(msg)
+                                raise TypeError(msg)
 
-                        token_for_request = str(next_page_token)
+                            last_response = response
+                            page_issues = response.get("issues") or []
+                            if not isinstance(page_issues, list):
+                                msg = f"Unexpected issues payload type from Jira search/jql response: {type(page_issues)}"
+                                logger.error(msg)
+                                raise TypeError(msg)
+
+                            issues_accumulated.extend(page_issues)
+                            remaining = max(remaining - len(page_issues), 0)
+
+                            next_page_token = response.get("nextPageToken")
+                            is_last_page = response.get("isLast")
+
+                            logger.info(
+                                "jira_search event=cloud_page jql_hash=%d page_size=%d token_present=%s is_last=%s",
+                                hash(jql),
+                                current_page_size,
+                                bool(next_page_token),
+                                is_last_page,
+                            )
+
+                            if remaining <= 0:
+                                break
+                            if not page_issues:
+                                logger.warning(
+                                    "jira_search event=empty_page jql_hash=%d token_present=%s is_last=%s",
+                                    hash(jql),
+                                    bool(next_page_token),
+                                    is_last_page,
+                                )
+                                break
+                            if not next_page_token or is_last_page is True:
+                                break
+
+                            token_for_request = str(next_page_token)
 
                     trimmed_issues = (
                         issues_accumulated[:limit_value]
@@ -200,13 +211,17 @@ class SearchMixin(JiraClient, IssueOperationsProto):
                     )
 
                     if isinstance(last_response, dict):
-                        if (
-                            last_response.get("nextPageToken") in (None, "")
-                            or last_response.get("isLast") is True
-                        ) and len(issues_accumulated) <= (
-                            limit_value if limit_value > 0 else len(issues_accumulated)
-                        ):
-                            response_dict_for_model["total"] = len(issues_accumulated)
+                        total_value = last_response.get("total")
+                        if isinstance(total_value, int):
+                            response_dict_for_model["total"] = int(total_value)
+                        max_results_value = last_response.get("maxResults")
+                        if isinstance(max_results_value, int):
+                            response_dict_for_model["maxResults"] = int(
+                                max_results_value
+                            )
+
+                    if "maxResults" not in response_dict_for_model:
+                        response_dict_for_model["maxResults"] = len(trimmed_issues)
 
                     search_result = JiraSearchResult.from_api_response(
                         response_dict_for_model,
@@ -250,10 +265,10 @@ class SearchMixin(JiraClient, IssueOperationsProto):
                 logger.error(error_msg)
                 raise MCPAtlassianAuthenticationError(error_msg) from http_err
             else:
-                logger.error(f"HTTP error during API call: {http_err}", exc_info=False)
+                logger.error("HTTP error during API call: %s", http_err, exc_info=False)
                 raise http_err
         except Exception as e:
-            logger.error(f"Error searching issues with JQL '{jql}': {str(e)}")
+            logger.error("Error searching issues with JQL '%s': %s", jql, e)
             msg = f"Error searching issues: {str(e)}"
             raise Exception(msg) from e
 
@@ -308,16 +323,12 @@ class SearchMixin(JiraClient, IssueOperationsProto):
             )
             return search_result
         except requests.HTTPError as e:
-            logger.error(
-                f"Error searching issues for board with JQL '{board_id}': {str(e.response.content)}"
-            )
-            msg = (
-                f"Error searching issues for board with JQL: {str(e.response.content)}"
-            )
+            msg = f"Error searching issues for board with JQL: {e}"
+            logger.error(msg)
             raise Exception(msg) from e
         except Exception as e:
-            logger.error(f"Error searching issues for board with JQL '{jql}': {str(e)}")
-            msg = f"Error searching issues for board with JQL {str(e)}"
+            msg = f"Error searching issues for board with JQL: {e}"
+            logger.error(msg)
             raise Exception(msg) from e
 
     def get_sprint_issues(
@@ -364,12 +375,8 @@ class SearchMixin(JiraClient, IssueOperationsProto):
             )
             return search_result
         except requests.HTTPError as e:
-            logger.error(
-                f"Error searching issues for sprint '{sprint_id}': {str(e.response.content)}"
-            )
-            msg = f"Error searching issues for sprint: {str(e.response.content)}"
-            raise Exception(msg) from e
+            logger.error("Error searching issues for sprint: %s", e)
+            raise Exception(f"Error searching issues for sprint: {e}") from e
         except Exception as e:
-            logger.error(f"Error searching issues for sprint: {sprint_id}': {str(e)}")
-            msg = f"Error searching issues for sprint: {str(e)}"
-            raise Exception(msg) from e
+            logger.error("Error searching issues for sprint: %s", e)
+            raise Exception(f"Error searching issues for sprint: {e}") from e
