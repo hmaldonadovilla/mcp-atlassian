@@ -99,11 +99,14 @@ def check_write_access(func: F) -> F:
 
         return await func(ctx, *args, **kwargs)
 
-    # Preserve original signature so FastMCP/Pydantic see the annotated params
+    # Preserve original signature and annotations so FastMCP/Pydantic see `ctx`
     try:
         wrapper.__signature__ = inspect.signature(func)  # type: ignore[attr-defined]
+        if hasattr(func, "__annotations__"):
+            wrapper.__annotations__ = dict(func.__annotations__)
+            wrapper.__annotations__.setdefault("ctx", Context)
     except Exception:
-        logger.warning("Failed to preserve signature of %s", func.__name__)
+        logger.warning("Failed to preserve signature/annotations of %s", func.__name__)
 
     return wrapper  # type: ignore
 
