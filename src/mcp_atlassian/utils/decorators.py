@@ -1,10 +1,26 @@
+import inspect
 import logging
 from collections.abc import Awaitable, Callable
 from functools import wraps
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
+
+if TYPE_CHECKING:  # pragma: no cover
+    from fastmcp import Context
+else:
+    try:
+        from fastmcp import Context
+    except ImportError as exc:  # pragma: no cover - fallback for lint/runtime safety
+        logging.getLogger(__name__).warning(
+            "fastmcp import failed; using dummy Context: %s", exc
+        )
+
+        class Context:  # type: ignore[misc,assignment]
+            """Fallback Context stub when fastmcp is unavailable."""
+
+            pass
+
 
 import requests
-from fastmcp import Context
 from requests.exceptions import HTTPError
 
 from mcp_atlassian.exceptions import MCPAtlassianAuthenticationError
@@ -82,6 +98,12 @@ def check_write_access(func: F) -> F:
             raise ValueError(msg)
 
         return await func(ctx, *args, **kwargs)
+
+    # Preserve original signature so FastMCP/Pydantic see the annotated params
+    try:
+        wrapper.__signature__ = inspect.signature(func)  # type: ignore[attr-defined]
+    except Exception:
+        logger.warning("Failed to preserve signature of %s", func.__name__)
 
     return wrapper  # type: ignore
 
