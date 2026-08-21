@@ -88,7 +88,11 @@ class BitbucketWorkspace(ApiModel):
             return cls()
 
         return cls(
-            name=data.get("name", UNKNOWN),
+            name=data.get("name")
+            or data.get("slug")
+            or data.get("key")
+            or data.get("uuid")
+            or UNKNOWN,
             type=data.get("type"),
             description=data.get("description"),
             public=data.get("public", not data.get("is_private", True)),

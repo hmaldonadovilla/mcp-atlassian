@@ -411,3 +411,15 @@ def test_cloud_models_normalize_response_shapes():
     assert pull_request.from_ref == {"branch": {"name": "feature"}}
     assert changes.values and changes.values[0].lines_added == 2
     assert (user.display_name, user.nickname) == ("Test User", "test")
+
+
+def test_cloud_workspace_uses_slug_as_display_name_when_name_is_absent():
+    workspace = BitbucketWorkspace.from_api_response(
+        {
+            "type": "workspace_base",
+            "slug": "puratos-aem",
+            "uuid": "{workspace}",
+        }
+    )
+
+    assert workspace.name == "puratos-aem"
