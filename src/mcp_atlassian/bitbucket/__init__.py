@@ -4,6 +4,7 @@ from atlassian.bitbucket import Bitbucket
 
 from .branches import BranchesMixin
 from .client import BitbucketClient
+from .cloud import BitbucketCloudClient
 from .config import BitbucketConfig
 from .pullrequests import PullRequestsMixin
 from .repositories import RepositoriesMixin
@@ -38,6 +39,7 @@ class BitbucketFetcher(
 
 __all__ = [
     "BitbucketClient",
+    "BitbucketCloudClient",
     "BitbucketConfig",
     "BitbucketFetcher",
     "UsersMixin",

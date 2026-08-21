@@ -35,9 +35,8 @@ class RepositoriesMixin(BitbucketClient):
             MCPAtlassianAuthenticationError: If authentication fails with the Bitbucket API (401/403)
         """
         try:
-            # Use the base class method that returns raw dictionaries
             raw_repos = self.bitbucket.get_repositories(workspace)
-            return raw_repos
+            return [BitbucketRepository.from_api_response(repo) for repo in raw_repos]
         except HTTPError as http_err:
             if http_err.response is not None and http_err.response.status_code in [
                 401,
@@ -181,11 +180,14 @@ class RepositoriesMixin(BitbucketClient):
             msg = f"Error getting directory content: {str(e)}"
             raise Exception(msg) from e
 
-    def get_repositories(self, workspace: str) -> list[BitbucketRepository]:
+    def get_repositories(
+        self, workspace: str | None = None
+    ) -> list[BitbucketRepository]:
         """Get list of repositories.
 
         Args:
-            workspace: Workspace name (Cloud) or project key (Server/DC)
+            workspace: Workspace name (Cloud) or project key (Server/DC).
+                Cloud can list repositories across accessible workspaces when omitted.
 
         Returns:
             List of repository dictionaries

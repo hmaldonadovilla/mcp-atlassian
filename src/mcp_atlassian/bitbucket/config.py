@@ -18,14 +18,15 @@ class BitbucketConfig:
     """Bitbucket API configuration.
 
     Handles authentication for Bitbucket Cloud and Server/Data Center:
-    - Cloud: username/app password (basic auth) or OAuth 2.0 (3LO)
+    - Cloud: email/API token (basic auth), access token, or OAuth 2.0 (3LO)
     - Server/DC: personal access token or basic auth
     """
 
     url: str  # Base URL for Bitbucket
     auth_type: Literal["basic", "pat", "oauth"]  # Authentication type
     username: str | None = None  # Email or username (Cloud)
-    app_password: str | None = None  # App password (Cloud)
+    app_password: str | None = None  # Password or deprecated Cloud input alias
+    api_token: str | None = None  # Bitbucket Cloud API token
     personal_token: str | None = None  # Personal access token (Server/DC)
     oauth_config: OAuthConfig | BYOAccessTokenOAuthConfig | None = None
     ssl_verify: bool = True  # Whether to verify SSL certificates
@@ -44,13 +45,8 @@ class BitbucketConfig:
             True if this is a cloud instance, False otherwise.
             Localhost URLs are always considered non-cloud (Server/Data Center).
         """
-        # Multi-Cloud OAuth mode: URL might be None, but we use api.atlassian.com
-        if (
-            self.auth_type == "oauth"
-            and self.oauth_config
-            and self.oauth_config.cloud_id
-        ):
-            # OAuth with cloud_id uses api.atlassian.com which is always Cloud
+        if self.auth_type == "oauth" and self.oauth_config:
+            # Bitbucket OAuth is Cloud-only and uses api.bitbucket.org directly.
             return True
 
         # For other auth types, use shared utility function for consistency
@@ -66,6 +62,16 @@ class BitbucketConfig:
         """
         return self.ssl_verify
 
+    @property
+    def cloud_api_token(self) -> str | None:
+        """Return the configured Cloud Basic-auth token.
+
+        ``BITBUCKET_APP_PASSWORD`` remains an input alias so existing
+        deployments can migrate without changing secret wiring at the same
+        time as this API fix.
+        """
+        return self.api_token or self.app_password
+
     def is_auth_configured(self) -> bool:
         """Check if authentication is properly configured.
 
@@ -77,7 +83,8 @@ class BitbucketConfig:
         elif self.auth_type == "pat":
             return bool(self.personal_token)
         elif self.auth_type == "basic":
-            return bool(self.username and self.app_password)
+            credential = self.cloud_api_token if self.is_cloud else self.app_password
+            return bool(self.username and credential)
         return False
 
     @classmethod
@@ -97,6 +104,7 @@ class BitbucketConfig:
 
         # Determine authentication type based on available environment variables
         username = os.getenv("BITBUCKET_USERNAME")
+        api_token = os.getenv("BITBUCKET_API_TOKEN")
         app_password = os.getenv("BITBUCKET_APP_PASSWORD")
         personal_token = os.getenv("BITBUCKET_PERSONAL_TOKEN")
 
@@ -109,19 +117,24 @@ class BitbucketConfig:
         if oauth_config:
             # OAuth is available - could be full config or minimal config for user-provided tokens
             auth_type = "oauth"
-        elif personal_token:
-            auth_type = "pat"
         elif is_cloud:
-            if username and app_password:
+            if username and (api_token or app_password):
                 auth_type = "basic"
+            elif personal_token:
+                # Workspace, project, repository, and OAuth access tokens use
+                # Bearer authentication against the Cloud API.
+                auth_type = "pat"
             else:
                 error_msg = (
-                    "For Bitbucket Cloud, either provide BITBUCKET_PERSONAL_TOKEN for PAT auth, "
-                    "BITBUCKET_USERNAME and BITBUCKET_APP_PASSWORD for basic auth, or configure OAuth"
+                    "For Bitbucket Cloud, provide BITBUCKET_USERNAME and "
+                    "BITBUCKET_API_TOKEN for basic auth, BITBUCKET_PERSONAL_TOKEN "
+                    "for bearer auth, or configure OAuth"
                 )
                 raise ValueError(error_msg)
         else:
-            if username and app_password:
+            if personal_token:
+                auth_type = "pat"
+            elif username and app_password:
                 auth_type = "basic"
             else:
                 error_msg = (
@@ -136,6 +149,7 @@ class BitbucketConfig:
             auth_type=auth_type,  # type: ignore[arg-type]
             username=username,
             app_password=app_password,
+            api_token=api_token,
             personal_token=personal_token,
             oauth_config=oauth_config,
             ssl_verify=is_env_ssl_verify("BITBUCKET_SSL_VERIFY"),

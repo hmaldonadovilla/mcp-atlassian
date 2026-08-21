@@ -5,6 +5,8 @@ from typing import Any
 
 from atlassian import Bitbucket
 from requests import Session
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from mcp_atlassian.exceptions import MCPAtlassianAuthenticationError
 from mcp_atlassian.utils.logging import (
@@ -14,6 +16,7 @@ from mcp_atlassian.utils.logging import (
 from mcp_atlassian.utils.oauth import configure_oauth_session
 from mcp_atlassian.utils.ssl import configure_ssl_verification
 
+from .cloud import BitbucketCloudClient
 from .config import BitbucketConfig
 
 # Configure logging
@@ -38,29 +41,48 @@ class BitbucketClient:
         # Load configuration from environment variables if not provided
         self.config = config or BitbucketConfig.from_env()
 
-        # Initialize the Bitbucket client based on auth type
-        if self.config.auth_type == "oauth":
-            if not self.config.oauth_config or not self.config.oauth_config.cloud_id:
-                error_msg = "OAuth authentication requires a valid cloud_id"
-                raise ValueError(error_msg)
-
-            # Create a session for OAuth
+        # Bitbucket Cloud and Server/Data Center use different API dialects.
+        # Cloud always uses the native REST 2.0 adapter; the third-party client
+        # remains in place for Server/Data Center compatibility.
+        if self.config.is_cloud:
             session = Session()
+            retry = Retry(
+                total=3,
+                connect=3,
+                read=3,
+                status=3,
+                backoff_factor=0.5,
+                status_forcelist=(429, 500, 502, 503, 504),
+                allowed_methods=frozenset({"GET", "HEAD", "OPTIONS"}),
+                respect_retry_after_header=True,
+            )
+            adapter = HTTPAdapter(max_retries=retry)
+            session.mount("https://", adapter)
+            session.mount("http://", adapter)
+            if self.config.auth_type == "oauth":
+                if not self.config.oauth_config:
+                    error_msg = "OAuth authentication requires OAuth configuration"
+                    raise ValueError(error_msg)
+                if not configure_oauth_session(session, self.config.oauth_config):
+                    error_msg = "Failed to configure OAuth session"
+                    raise MCPAtlassianAuthenticationError(error_msg)
+            elif self.config.auth_type == "pat":
+                session.headers["Authorization"] = (
+                    f"Bearer {self.config.personal_token}"
+                )
+            else:
+                session.auth = (
+                    self.config.username or "",
+                    self.config.cloud_api_token or "",
+                )
 
-            # Configure the session with OAuth authentication
-            if not configure_oauth_session(session, self.config.oauth_config):
-                error_msg = "Failed to configure OAuth session"
-                raise MCPAtlassianAuthenticationError(error_msg)
-
-            # The Bitbucket API URL with OAuth is different
-            api_url = f"https://api.atlassian.com/ex/bitbucket/{self.config.oauth_config.cloud_id}"
-
-            # Initialize Bitbucket with the session
-            self.bitbucket = Bitbucket(
-                url=api_url,
+            self.bitbucket = BitbucketCloudClient(
                 session=session,
-                cloud=True,  # OAuth is only for Cloud
-                verify_ssl=self.config.ssl_verify,
+                url=self.config.url,
+            )
+            logger.debug(
+                "Initialized native Bitbucket Cloud REST 2.0 client with %s auth",
+                self.config.auth_type,
             )
         elif self.config.auth_type == "pat":
             logger.debug(
@@ -79,7 +101,7 @@ class BitbucketClient:
             logger.debug(
                 f"Initializing Bitbucket client with Basic auth. "
                 f"URL: {self.config.url}, Username: {self.config.username}, "
-                f"App Password present: {bool(self.config.app_password)}, "
+                f"Password present: {bool(self.config.app_password)}, "
                 f"Is Cloud: {self.config.is_cloud}"
             )
             self.bitbucket = Bitbucket(
@@ -90,8 +112,8 @@ class BitbucketClient:
                 verify_ssl=self.config.ssl_verify,
             )
             logger.debug(
-                f"Bitbucket client initialized. Session headers (Authorization masked): "
-                f"{get_masked_session_headers(dict(self.bitbucket._session.headers))}"
+                "Bitbucket client initialized. Session headers "
+                f"(Authorization masked): {get_masked_session_headers(dict(self.bitbucket._session.headers))}"
             )
 
         # Configure SSL verification using the shared utility
@@ -114,7 +136,7 @@ class BitbucketClient:
 
         if proxies:
             self.bitbucket._session.proxies.update(proxies)
-            logger.debug(f"Configured proxies: {proxies}")
+            logger.debug("Configured Bitbucket proxies for: %s", list(proxies))
 
         # Configure no_proxy
         if self.config.no_proxy:
@@ -142,13 +164,15 @@ class BitbucketClient:
             List of comment dictionaries
         """
         try:
-            # Use the generic get method with the appropriate endpoint
             if self.config.is_cloud:
-                # Bitbucket Cloud API 2.0
-                endpoint = f"repositories/{workspace}/{repository}/pullrequests/{pull_request_id}/activities"
-            else:
-                # Bitbucket Server/DC API 1.0
-                endpoint = f"projects/{workspace}/repos/{repository}/pull-requests/{pull_request_id}/activities"
+                return self.bitbucket.get_pull_request_activities(
+                    workspace, repository, pull_request_id
+                )
+
+            endpoint = (
+                f"projects/{workspace}/repos/{repository}/pull-requests/"
+                f"{pull_request_id}/activities"
+            )
 
             response = self.bitbucket.get(endpoint)
 
