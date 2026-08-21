@@ -197,7 +197,11 @@ class BitbucketCloudClient:
 
     def project_list(self) -> list[dict[str, Any]]:
         """List workspaces visible to the authenticated principal."""
-        return self._get_paginated("user/workspaces")
+        workspace_access = self._get_paginated("user/workspaces")
+        return [
+            access["workspace"] if isinstance(access.get("workspace"), dict) else access
+            for access in workspace_access
+        ]
 
     def get_repositories(self, workspace: str | None = None) -> list[dict[str, Any]]:
         """List repositories for one workspace or the authenticated user."""

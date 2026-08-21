@@ -56,8 +56,27 @@ def client(session):
 def test_workspace_pagination_follows_next_link(client, session):
     next_url = f"{API}/user/workspaces?page=2"
     session.request.side_effect = [
-        make_response({"values": [{"slug": "one"}], "next": next_url}),
-        make_response({"values": [{"slug": "two"}]}),
+        make_response(
+            {
+                "values": [
+                    {
+                        "type": "workspace_access",
+                        "workspace": {"slug": "one"},
+                    }
+                ],
+                "next": next_url,
+            }
+        ),
+        make_response(
+            {
+                "values": [
+                    {
+                        "type": "workspace_access",
+                        "workspace": {"slug": "two"},
+                    }
+                ]
+            }
+        ),
     ]
 
     result = client.project_list()
@@ -76,8 +95,14 @@ def test_repository_routes_enumerate_accessible_workspaces(client, session):
         make_response(
             {
                 "values": [
-                    {"slug": "workspace-one"},
-                    {"uuid": "{workspace-two}"},
+                    {
+                        "type": "workspace_access",
+                        "workspace": {"slug": "workspace-one"},
+                    },
+                    {
+                        "type": "workspace_access",
+                        "workspace": {"uuid": "{workspace-two}"},
+                    },
                 ]
             }
         ),
