@@ -151,7 +151,6 @@ def get_available_services(
                 os.getenv("ATLASSIAN_OAUTH_CLIENT_SECRET"),
                 os.getenv("ATLASSIAN_OAUTH_REDIRECT_URI"),
                 os.getenv("ATLASSIAN_OAUTH_SCOPE"),
-                os.getenv("ATLASSIAN_OAUTH_CLOUD_ID"),
             ]
         ):
             bitbucket_is_setup = True
@@ -170,14 +169,15 @@ def get_available_services(
                 "with provided access token"
             )
         elif is_cloud:  # Cloud non-OAuth
-            if all(
-                [
-                    os.getenv("BITBUCKET_USERNAME"),
-                    os.getenv("BITBUCKET_APP_PASSWORD"),
-                ]
-            ):
+            cloud_basic_token = os.getenv("BITBUCKET_API_TOKEN") or os.getenv(
+                "BITBUCKET_APP_PASSWORD"
+            )
+            if os.getenv("BITBUCKET_USERNAME") and cloud_basic_token:
                 bitbucket_is_setup = True
-                logger.info("Using Bitbucket Cloud Basic Authentication (App Password)")
+                logger.info("Using Bitbucket Cloud Basic Authentication (API token)")
+            elif os.getenv("BITBUCKET_PERSONAL_TOKEN"):
+                bitbucket_is_setup = True
+                logger.info("Using Bitbucket Cloud Bearer token authentication")
         else:  # Server/Data Center non-OAuth
             if os.getenv("BITBUCKET_PERSONAL_TOKEN") or (
                 os.getenv("BITBUCKET_USERNAME") and os.getenv("BITBUCKET_APP_PASSWORD")

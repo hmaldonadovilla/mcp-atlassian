@@ -265,7 +265,6 @@ class BranchesMixin(BitbucketClient):
                 merges=merges,
                 commit_id=commit_id,
             )
-            print(changes)
             return CommitChanges.from_api_response(changes)
         except HTTPError as http_err:
             if http_err.response is not None and http_err.response.status_code in [

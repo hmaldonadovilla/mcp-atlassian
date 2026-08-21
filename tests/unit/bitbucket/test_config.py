@@ -92,6 +92,23 @@ class TestBitbucketConfig:
     @patch.dict(
         os.environ,
         {
+            "BITBUCKET_URL": "https://api.bitbucket.org",
+            "BITBUCKET_USERNAME": "test@example.com",
+            "BITBUCKET_API_TOKEN": "api_token",
+        },
+        clear=True,
+    )
+    def test_from_env_api_token_cloud(self):
+        """Test the current Bitbucket Cloud API token configuration."""
+        config = BitbucketConfig.from_env()
+
+        assert config.auth_type == "basic"
+        assert config.api_token == "api_token"
+        assert config.cloud_api_token == "api_token"
+
+    @patch.dict(
+        os.environ,
+        {
             "BITBUCKET_URL": "https://bitbucket.company.com",
             "BITBUCKET_USERNAME": "testuser",
             "BITBUCKET_PERSONAL_TOKEN": "pat_token",
@@ -138,7 +155,7 @@ class TestBitbucketConfig:
         """Test that missing credentials raises ValueError."""
         with pytest.raises(
             ValueError,
-            match="For Bitbucket Cloud, either provide.*BITBUCKET_PERSONAL_TOKEN.*or.*BITBUCKET_USERNAME.*BITBUCKET_APP_PASSWORD",
+            match="For Bitbucket Cloud.*BITBUCKET_API_TOKEN.*BITBUCKET_PERSONAL_TOKEN",
         ):
             BitbucketConfig.from_env()
 
@@ -154,7 +171,7 @@ class TestBitbucketConfig:
         """Test that incomplete basic auth credentials raises ValueError."""
         with pytest.raises(
             ValueError,
-            match="For Bitbucket Cloud, either provide.*BITBUCKET_PERSONAL_TOKEN.*or.*BITBUCKET_USERNAME.*BITBUCKET_APP_PASSWORD",
+            match="For Bitbucket Cloud.*BITBUCKET_API_TOKEN.*BITBUCKET_PERSONAL_TOKEN",
         ):
             BitbucketConfig.from_env()
 

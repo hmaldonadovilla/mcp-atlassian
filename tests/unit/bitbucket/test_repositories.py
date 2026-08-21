@@ -85,7 +85,7 @@ class TestRepositoriesMixin:
 
         result = repositories_mixin.get_all_repositories("test-workspace")
 
-        assert result == sample_repository_data
+        assert [repository.name for repository in result] == ["repo1", "repo2"]
         repositories_mixin.bitbucket.get_repositories.assert_called_once_with(
             "test-workspace"
         )
@@ -100,7 +100,7 @@ class TestRepositoriesMixin:
 
         result = repositories_mixin.get_all_repositories()
 
-        assert result == sample_repository_data
+        assert [repository.name for repository in result] == ["repo1", "repo2"]
         repositories_mixin.bitbucket.get_repositories.assert_called_once_with(None)
 
     def test_get_all_repositories_http_401_error(self, repositories_mixin):

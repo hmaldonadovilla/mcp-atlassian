@@ -38,7 +38,7 @@ https://github.com/user-attachments/assets/7fe9c488-ad0c-4876-9b54-120b666bb785
 | **Confluence** | Server/Data Center | ✅ Supported (version 6.0+)  |
 | **Jira**       | Cloud              | ✅ Fully supported           |
 | **Jira**       | Server/Data Center | ✅ Supported (version 8.14+) |
-| **Bitbucket**  | Cloud              | ⚠️ Not Tested                |
+| **Bitbucket**  | Cloud              | ✅ Supported (REST API 2.0) |
 | **Bitbucket**  | Server/Data Center | ✅ Supported (version 9.0+)  |
 
 ## Quick Start Guide
@@ -52,6 +52,13 @@ MCP Atlassian supports four authentication methods:
 1. Go to https://id.atlassian.com/manage-profile/security/api-tokens
 2. Click **Create API token**, name it
 3. Copy the token immediately
+
+For Bitbucket Cloud, set `BITBUCKET_URL=https://api.bitbucket.org`, your
+Atlassian account email in `BITBUCKET_USERNAME`, and the token in
+`BITBUCKET_API_TOKEN`. Existing deployments may continue passing an API token
+through `BITBUCKET_APP_PASSWORD` while their secret wiring is migrated. Cloud
+workspace, project, or repository access tokens can instead be supplied as
+`BITBUCKET_PERSONAL_TOKEN` and are sent with Bearer authentication.
 
 #### B. Personal Access Token (Server/Data Center)
 
@@ -129,7 +136,7 @@ For **Confluence authentication**:
 - `X-Atlassian-Confluence-Url`: Your Confluence instance URL
 
 For **Bitbucket authentication**:
-- `X-Atlassian-Bitbucket-Personal-Token`: Your Bitbucket PAT or app password
+- `X-Atlassian-Bitbucket-Personal-Token`: Your Bitbucket Cloud access token or Server/DC PAT
 - `X-Atlassian-Bitbucket-Url`: Your Bitbucket instance URL
 
 **Benefits:**
@@ -151,7 +158,7 @@ For **Bitbucket authentication**:
       "X-Atlassian-Jira-Url": "https://your-jira-instance.com",
       "X-Atlassian-Confluence-Personal-Token": "your_confluence_pat_or_api_token",
       "X-Atlassian-Confluence-Url": "https://your-confluence-instance.com",
-      "X-Atlassian-Bitbucket-Personal-Token": "your_bitbucket_pat_or_app_password",
+      "X-Atlassian-Bitbucket-Personal-Token": "your_bitbucket_access_token",
       "X-Atlassian-Bitbucket-Url": "https://your-bitbucket-instance.com"
     },
     "type": "http"
@@ -231,7 +238,7 @@ There are three main approaches to configure the Docker container:
         "-e", "JIRA_API_TOKEN",
         "-e", "BITBUCKET_URL",
         "-e", "BITBUCKET_USERNAME",
-        "-e", "BITBUCKET_APP_PASSWORD",
+        "-e", "BITBUCKET_API_TOKEN",
         "ghcr.io/SharkyND/mcp-atlassian:latest"
       ],
       "env": {
@@ -241,9 +248,9 @@ There are three main approaches to configure the Docker container:
         "JIRA_URL": "https://your-company.atlassian.net",
         "JIRA_USERNAME": "your.email@company.com",
         "JIRA_API_TOKEN": "your_jira_api_token",
-        "BITBUCKET_URL": "https://bitbucket.org",
+        "BITBUCKET_URL": "https://api.bitbucket.org",
         "BITBUCKET_USERNAME": "your.email@company.com",
-        "BITBUCKET_APP_PASSWORD": "your_bitbucket_app_password"
+        "BITBUCKET_API_TOKEN": "your_bitbucket_api_token"
       }
     }
   }
@@ -968,7 +975,8 @@ Use the header to temporarily override server defaults for a single client reque
 - `get_commits`: Get commit history for a repository
 - `create_pull_request`: Create a new pull request
 - `create_branch`: Create a new branch in a repository
-- `add_pull_request_blocker_comment`: Add a blocking comment to a pull request
+- `add_pull_request_blocker_comment`: Add a blocking comment to a pull request;
+  Cloud maps blockers to pull-request tasks
 - `add_pull_request_comment`: Add a regular comment to a pull request
 
 
