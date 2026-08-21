@@ -197,14 +197,26 @@ class BitbucketCloudClient:
 
     def project_list(self) -> list[dict[str, Any]]:
         """List workspaces visible to the authenticated principal."""
-        return self._get_paginated("workspaces")
+        return self._get_paginated("user/workspaces")
 
     def get_repositories(self, workspace: str | None = None) -> list[dict[str, Any]]:
         """List repositories for one workspace or the authenticated user."""
         if workspace:
             endpoint = f"repositories/{self._segment(workspace)}"
             return self._get_paginated(endpoint)
-        return self._get_paginated("repositories", params={"role": "member"})
+
+        repositories: list[dict[str, Any]] = []
+        for workspace_data in self.project_list():
+            workspace_id = workspace_data.get("slug") or workspace_data.get("uuid")
+            if not workspace_id:
+                logger.warning(
+                    "Skipping Bitbucket workspace without a slug or UUID: %s",
+                    workspace_data,
+                )
+                continue
+            endpoint = f"repositories/{self._segment(workspace_id)}"
+            repositories.extend(self._get_paginated(endpoint))
+        return repositories
 
     def repo_list(self, workspace: str | None = None) -> Iterator[dict[str, Any]]:
         """Compatibility iterator for repository listing."""
@@ -241,6 +253,8 @@ class BitbucketCloudClient:
         encoded_path = self._path(path)
         if encoded_path:
             endpoint = f"{endpoint}/{encoded_path}"
+        else:
+            endpoint = f"{endpoint}/"
         return self._get_paginated(endpoint)
 
     def get_branches(
@@ -260,6 +274,19 @@ class BitbucketCloudClient:
         )
         fetch_limit = None if limit is None or filter else max(0, start) + max(0, limit)
         branches = self._get_paginated(endpoint, limit=fetch_limit)
+        try:
+            default_branch = self.get_default_branch(workspace, repository)
+        except HTTPError:
+            logger.warning(
+                "Could not determine the default branch for %s/%s",
+                workspace,
+                repository,
+                exc_info=True,
+            )
+        else:
+            default_name = default_branch.get("name")
+            for branch in branches:
+                branch["isDefault"] = branch.get("name") == default_name
         if filter:
             branches = [
                 branch

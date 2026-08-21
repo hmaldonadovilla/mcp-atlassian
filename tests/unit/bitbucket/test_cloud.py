@@ -54,7 +54,7 @@ def client(session):
 
 
 def test_workspace_pagination_follows_next_link(client, session):
-    next_url = f"{API}/workspaces?page=2"
+    next_url = f"{API}/user/workspaces?page=2"
     session.request.side_effect = [
         make_response({"values": [{"slug": "one"}], "next": next_url}),
         make_response({"values": [{"slug": "two"}]}),
@@ -63,34 +63,56 @@ def test_workspace_pagination_follows_next_link(client, session):
     result = client.project_list()
 
     assert [item["slug"] for item in result] == ["one", "two"]
-    assert session.request.call_args_list[0].args == ("GET", f"{API}/workspaces")
+    assert session.request.call_args_list[0].args == (
+        "GET",
+        f"{API}/user/workspaces",
+    )
     assert session.request.call_args_list[0].kwargs["params"] == {"pagelen": 50}
     assert session.request.call_args_list[1].args == ("GET", next_url)
 
 
-def test_repository_routes_and_global_role_filter(client, session):
+def test_repository_routes_enumerate_accessible_workspaces(client, session):
     session.request.side_effect = [
-        make_response({"values": [{"slug": "global"}]}),
+        make_response(
+            {
+                "values": [
+                    {"slug": "workspace-one"},
+                    {"uuid": "{workspace-two}"},
+                ]
+            }
+        ),
+        make_response({"values": [{"slug": "global-one"}]}),
+        make_response({"values": [{"slug": "global-two"}]}),
         make_response({"values": [{"slug": "scoped"}]}),
         make_response({"slug": "repo"}),
     ]
 
-    assert client.get_repositories() == [{"slug": "global"}]
+    assert client.get_repositories() == [
+        {"slug": "global-one"},
+        {"slug": "global-two"},
+    ]
     assert client.get_repositories("my workspace") == [{"slug": "scoped"}]
     assert client.get_repo("my workspace", "a/repo") == {"slug": "repo"}
 
-    assert session.request.call_args_list[0].args == ("GET", f"{API}/repositories")
-    assert session.request.call_args_list[0].kwargs["params"] == {
-        "role": "member",
-        "pagelen": 50,
-    }
+    assert session.request.call_args_list[0].args == (
+        "GET",
+        f"{API}/user/workspaces",
+    )
+    assert session.request.call_args_list[1].args == (
+        "GET",
+        f"{API}/repositories/workspace-one",
+    )
+    assert session.request.call_args_list[2].args == (
+        "GET",
+        f"{API}/repositories/%7Bworkspace-two%7D",
+    )
     assert (
-        session.request.call_args_list[1]
+        session.request.call_args_list[3]
         .args[1]
         .endswith("/repositories/my%20workspace")
     )
     assert (
-        session.request.call_args_list[2]
+        session.request.call_args_list[4]
         .args[1]
         .endswith("/repositories/my%20workspace/a%2Frepo")
     )
@@ -100,15 +122,18 @@ def test_file_and_directory_routes(client, session):
     session.request.side_effect = [
         make_response(content=b"hello"),
         make_response({"values": [{"path": "src/main.py"}]}),
+        make_response({"values": [{"path": "README.md"}]}),
     ]
 
     content = client.get_content_of_file(
         "workspace", "repo", "src/main.py", "feature/test"
     )
     entries = client.get_file_list("workspace", "repo", "src", "main")
+    root_entries = client.get_file_list("workspace", "repo", "", "main")
 
     assert content == b"hello"
     assert entries == [{"path": "src/main.py"}]
+    assert root_entries == [{"path": "README.md"}]
     assert (
         session.request.call_args_list[0]
         .args[1]
@@ -118,6 +143,11 @@ def test_file_and_directory_routes(client, session):
         session.request.call_args_list[1]
         .args[1]
         .endswith("/repositories/workspace/repo/src/main/src")
+    )
+    assert (
+        session.request.call_args_list[2]
+        .args[1]
+        .endswith("/repositories/workspace/repo/src/main/")
     )
 
 
@@ -133,6 +163,7 @@ def test_branch_routes_filter_and_default_branch(client, session):
             }
         ),
         make_response({"mainbranch": {"name": "main", "target": {"hash": "abc"}}}),
+        make_response({"mainbranch": {"name": "main", "target": {"hash": "abc"}}}),
     ]
 
     branches = client.get_branches(
@@ -140,7 +171,7 @@ def test_branch_routes_filter_and_default_branch(client, session):
     )
     default = client.get_default_branch("workspace", "repo")
 
-    assert branches == [{"name": "feature/other"}]
+    assert branches == [{"name": "feature/other", "isDefault": False}]
     assert default["name"] == "main"
     assert default["isDefault"] is True
     assert (
@@ -148,6 +179,20 @@ def test_branch_routes_filter_and_default_branch(client, session):
         .args[1]
         .endswith("/repositories/workspace/repo/refs/branches")
     )
+
+
+def test_branch_routes_mark_repository_default_branch(client, session):
+    session.request.side_effect = [
+        make_response({"values": [{"name": "main"}, {"name": "develop"}]}),
+        make_response({"mainbranch": {"name": "main"}}),
+    ]
+
+    branches = client.get_branches("workspace", "repo")
+
+    assert branches == [
+        {"name": "main", "isDefault": True},
+        {"name": "develop", "isDefault": False},
+    ]
 
 
 def test_commit_and_diffstat_routes(client, session):
